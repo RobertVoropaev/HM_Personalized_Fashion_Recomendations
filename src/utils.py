@@ -3,6 +3,8 @@ import pandas as pd
 
 from datetime import datetime, timedelta
 
+from matplotlib import pyplot as plt
+
 ### Metrics ###
 
 def avg_precision_at_k(actual: list, predicted: list, k: int = 12):
@@ -43,3 +45,25 @@ def subtract_days(date, days):
 
 def get_true_articles(transactions) -> pd.Series:
     return transactions.groupby("customer_id")["article_id"].unique().apply(" ".join)
+
+
+### Images
+
+def show_article(article_id):
+    plt.imshow(plt.imread(f"../input/images/{article_id[:3]}/{article_id}.jpg"))
+    plt.show()
+
+def show_purchase(customer_id):
+    cust_tr = transactions[transactions["customer_id"] == customer_id]
+    dates = cust_tr["t_dat"].unique()
+    for j, t_dat in enumerate(dates):
+        cust_tr_dat = cust_tr[cust_tr["t_dat"] == t_dat]
+        print(t_dat)
+        for i in range(cust_tr_dat.shape[0]):
+            article_id = cust_tr_dat.iloc[i]["article_id"]
+            t_dat = cust_tr_dat.iloc[i]["t_dat"]
+            try:
+                plt.imshow(plt.imread(f"../input/images/{article_id[:3]}/{article_id}.jpg"))
+                plt.show()
+            except:
+                continue
