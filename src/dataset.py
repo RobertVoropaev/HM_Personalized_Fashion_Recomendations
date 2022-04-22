@@ -1,6 +1,13 @@
+from .utils import *
+
 class Dataset:
-    def __init__(self, test_min_date: str = None):
-        self.test_min_date = test_min_date
+    def __init__(self, train_days: int = 30, test_days: int = 0):
+        self.train_days = train_days
+        self.test_days = test_days
+        
+        self.origin_transactions = self.load_original_transactions()
+        self.train = self.get_transaction_train()
+        self.test = self.get_transaction_test()
         
     ### Original dataset
         
@@ -16,31 +23,43 @@ class Dataset:
     ### Transactions
     
     def get_transaction_train(self):
-        transactions = self.load_original_transactions()
+        transactions = self.origin_transactions.copy()
         
         transactions["sales_channel_1_flg"] = (transactions["sales_channel_id"] == 1).astype(int)
         transactions["sales_channel_2_flg"] = (transactions["sales_channel_id"] == 2).astype(int)
         del transactions["sales_channel_id"]
         
-        return transactions
+        min_date = subtract_days(transactions["t_dat"].max(), self.test_days + self.train_days)
+        max_date = subtract_days(transactions["t_dat"].max(), self.test_days)
+        
+        return transactions[(transactions["t_dat"] >= min_date) & (transactions["t_dat"] <= max_date)]
     
     def get_transaction_test(self):
-        pass
+        transactions = self.origin_transactions.copy()
+        
+        transactions["sales_channel_1_flg"] = (transactions["sales_channel_id"] == 1).astype(int)
+        transactions["sales_channel_2_flg"] = (transactions["sales_channel_id"] == 2).astype(int)
+        del transactions["sales_channel_id"]
+        
+        min_date = subtract_days(transactions["t_dat"].max(), self.test_days)
+        
+        return transactions[(transactions["t_dat"] > min_date)]
+    
+    def get_train_test(self, train_days: int = 30):
+        min_date = subtract_days(self.train["t_dat"].max(), train_days)
+        train = self.train[(self.train["t_dat"] > min_date)]
+        return train, self.test
     
     ### Articles
     
     def get_articles(self):
         articles = self.load_original_articles()
         
-        articles["product_code_name"] = (
-            articles[["product_code", "prod_name"]].astype(str).agg(": ".join, axis=1)
-        )
-        articles["department_no_name"] = (
-            articles[["department_no", "department_name"]].astype(str).agg(": ".join, axis=1)
-        )
-        articles["section_no_name"] = (
-            articles[["section_no", "section_name"]].astype(str).agg(": ".join, axis=1)
-        )
+        ### Prepare
+        
+        articles["product_code_name"] = articles[["product_code", "prod_name"]].astype(str).agg(": ".join, axis=1)
+        articles["department_no_name"] = articles[["department_no", "department_name"]].astype(str).agg(": ".join, axis=1)
+        articles["section_no_name"] = articles[["section_no", "section_name"]].astype(str).agg(": ".join, axis=1)
 
         articles = articles.drop([
             "product_code", "prod_name", "product_type_no", "graphical_appearance_no", 
@@ -49,18 +68,16 @@ class Dataset:
             "section_name", "garment_group_no"], 
             axis=1
         )
+
+        articles = articles.fillna({"detail_desc": "Unknown"})
+        
         articles["product_code_name"] = self.crop_by_top_values(articles["product_code_name"], 
                                                                 min_value_count = 20)
         
-        articles_agg = self.transaction_articles_agg()
-        articles = articles.merge(articles_agg, on="article_id", how="left")
-        articles = articles.fillna(0.0)
-        return articles
-    
-    
-    def get_transaction_articles_agg(self):
+        ### Add transaction data
+        
         articles_agg = (
-            self.load_transaction_train()
+            self.train
                 .groupby(["article_id"])
                 .agg({
                     "price": ["min", "max", "mean", "std"],
@@ -68,29 +85,43 @@ class Dataset:
                     "sales_channel_2_flg": ["sum"],
                     "t_dat": ["min", "max"]})
         )
+
         articles_agg.columns = articles_agg.columns.map(lambda x: "_".join(x))
 
-        articles_agg["sales_channel_1_ratio"] = (
-            articles_agg["sales_channel_1_flg_sum"] / 
-            (articles_agg["sales_channel_1_flg_sum"] + articles_agg["sales_channel_2_flg_sum"])
+        articles_agg["sales_sum"] = (
+            articles_agg["sales_channel_1_flg_sum"] + articles_agg["sales_channel_2_flg_sum"]
         )
 
-        articles_agg["last_days_ago"] = (
-            articles_agg["t_dat_max"].apply(lambda x: self.day_diff(test_min_date, x))
+        articles_agg["sales_channel_1_ratio"] = (
+            articles_agg["sales_channel_1_flg_sum"] / articles_agg["sales_sum"]
+
         )
-        articles_agg["first_days_ago"] = (
-            articles_agg["t_dat_min"].apply(lambda x: self.day_diff(test_min_date, x))
-        )
+        articles_agg = articles_agg.fillna(0.0)
         
-        tr_cust_art_agg = (
-            self.get_transaction_train()
+        t_dat_max = self.train["t_dat"].max()
+        articles_agg["last_days_ago"] = articles_agg["t_dat_max"].apply(lambda x: self.day_diff(t_dat_max, x))
+        articles_agg["first_days_ago"] = articles_agg["t_dat_min"].apply(lambda x: self.day_diff(t_dat_max, x))
+        del articles_agg["t_dat_max"], articles_agg["t_dat_min"]
+        
+        ### Mean count
+        
+        mean_count = (
+            self.train
                 .groupby(["customer_id", "article_id"]).size()
                 .groupby(["article_id"]).mean()
                 .reset_index().rename({0: "mean_count_on_customer"}, axis=1)
         )
-        articles_agg = articles_agg.merge(tr_cust_art_agg, on="article_id", how="left")
         
-        return articles_agg.drop(["t_dat_max", "t_dat_min"], axis=1)
+        articles = (
+            articles.merge(articles_agg, on="article_id", how="left")
+                    .merge(mean_count, on="article_id", how="left")    
+                    .fillna({"last_days_ago": 9999, "first_days_ago": 9999})
+                    .fillna(0.0)
+        )
+        
+        return articles
+    
+    
     
     ### Customers
     
@@ -104,51 +135,27 @@ class Dataset:
         customers["postal_code"] = self.crop_by_top_values(customers["postal_code"], 
                                                            min_value_count=30)
         
+       
+        # Add age group
         age_median = customers["age"].median()
         customers["age"] = customers["age"].apply(lambda x: x if x > 0 else age_median) 
-        customers["age_group"] = (
-            customers["age"]
-                .apply(lambda x: f"{int(np.floor(x / 10) * 10)}-{int(np.floor(x / 10 + 1) * 10)}")
-                .apply(lambda x: "70+" if x in ["60-70", "70-80", "80-90", "90-100"] else x)
-        )
-        
-        customer_agg = self.get_transaction_customers_agg()
-        customers = customers.merge(customer_agg, on="customer_id", how="left")
-        
 
-        groups = self.get_customer_group_counters() 
-        customers = customers.merge(groups, on="customer_id", how="left")
-
-        def get_common_group(line):
-            counter = [
-                (line["Ladieswear_count"], "Lady"),
-                (line["Menswear_count"], "Men"),
-                (line["Baby/Children_count"], "Children"),
-                (line["Divided_count"] + line["Sport_count"], "Divided"),
-            ]
-
-            top_group = list(map(lambda x: x[1], sorted(counter, key=lambda x: -x[0])))[0]
-            return top_group
-        customers["common_group"] = customers.apply(get_common_group, axis=1)
-
-        def get_sex(line):
-            sex_factor = line["Menswear_count"] - line["Ladieswear_count"]
-            if sex_factor > 0:
-                return "Men"
-            elif sex_factor < 0:
-                return "Woman"
+        def get_age_group(age):
+            if 16 <= age < 22:
+                return "16-21"
+            elif 22 <= age < 30:
+                return "22-29"
+            elif 30 <= age < 45:
+                return "30-44"
+            elif 45 <= age < 55:
+                return "45-54"
             else:
-                return "Unknown"
-        customers["sex"] = customers.apply(get_sex, axis=1) 
+                return "54+"
 
-        customers["has_children"] = customers.apply(lambda x: int(x["Baby/Children_count"] > 0), axis=1) 
+        customers["age_group"] = customers["age"].apply(get_age_group)
         
-        return customers
-    
-    def get_transaction_customers_agg(self):
-        transactions = self.get_transaction_train()
         customer_agg = (
-            transactions
+            self.train
                 .groupby(["customer_id"])
                 .agg({
                     "price": ["min", "max", "mean", "std"],
@@ -156,29 +163,37 @@ class Dataset:
                     "sales_channel_2_flg": ["sum"],
                     "t_dat": ["min", "max"]})
         )
+
         customer_agg.columns = customer_agg.columns.map(lambda x: "_".join(x))
-        
+
+        customer_agg["sales_sum"] = (
+            customer_agg["sales_channel_1_flg_sum"] + customer_agg["sales_channel_2_flg_sum"]
+        )
+
         customer_agg["sales_channel_1_ratio"] = (
-            customer_agg["sales_channel_1_flg_sum"] / 
-            (customer_agg["sales_channel_1_flg_sum"] + customer_agg["sales_channel_2_flg_sum"])
-        )
-        customers["sales_count"] = (
-            customers["sales_channel_1_flg_sum"] + customers["sales_channel_2_flg_sum"]
+            customer_agg["sales_channel_1_flg_sum"] / customer_agg["sales_sum"]
         )
 
-        customer_agg["last_days_ago"] = (
-            customer_agg["t_dat_max"].apply(lambda x: self.day_diff(test_min_date, x))
-        )
-        customer_agg["first_days_ago"] = (
-            customer_agg["t_dat_min"].apply(lambda x: self.day_diff(test_min_date, x))
-        )
+        t_data_max = self.train["t_dat"].max()
+        customer_agg["last_days_ago"] = customer_agg["t_dat_max"].apply(lambda x: self.day_diff(t_data_max, x))
+        customer_agg["first_days_ago"] = customer_agg["t_dat_min"].apply(lambda x: self.day_diff(t_data_max, x))
+        del customer_agg["t_dat_max"], customer_agg["t_dat_min"]
 
-        return customer_agg.drop(["t_dat_max", "t_dat_min"], axis=1)
-    
-    def get_customer_group_counters(self):
-        transactions =  self.get_transaction_train()
-        articles = self.load_original_articles()
-        tr_articles = transactions.merge(articles, on="article_id", how="inner")
+        customer_agg = customer_agg.fillna(0.0)
+        
+        # Mean count
+        
+        mean_count = (
+            self.train.groupby(["customer_id", "t_dat"]).size()
+                .groupby(["customer_id"]).mean()
+                .reset_index().rename({0: "mean_article_count_on_date"}, axis=1)
+        )
+        
+        ### Article groups
+        
+        articles = self.get_articles()
+        
+        tr_articles = self.train.merge(articles, on="article_id", how="inner")
 
         groups = None
         for group in articles["index_group_name"].unique():
@@ -192,7 +207,53 @@ class Dataset:
             else:
                 groups = group_df
                 
-        return groups
+        customers = (
+            customers.merge(customer_agg, on="customer_id", how="left")
+                    .merge(mean_count, on="customer_id", how="left")
+                    .merge(groups, on="customer_id", how="left")
+                    .fillna({"last_days_ago": 9999, "first_days_ago": 9999})
+                    .fillna(0.0)
+        )
+        
+        def get_common_group(line):
+            counter = [
+                (line["Ladieswear_count"], "Lady"),
+                (line["Baby/Children_count"], "Children"),
+                (line["Divided_count"] + line["Sport_count"], "Divided"),
+                (line["Menswear_count"], "Men")
+            ]
+
+            return list(map(lambda x: x[1], sorted(counter, key=lambda x: -x[0])))[0]
+        customers["common_group"] = customers.apply(get_common_group, axis=1)
+
+        def get_sex(line):
+            sex_factor = line["Menswear_count"] - line["Ladieswear_count"]
+            if sex_factor > 0:
+                return "Men"
+            elif sex_factor < 0:
+                return "Woman"
+            else:
+                return "Unknown"
+        customers["sex"] = customers.apply(get_sex, axis=1)
+        
+        customers["has_children"] = customers.apply(lambda x: int(x["Baby/Children_count"] > 0), axis=1) 
+        
+        ### Price group
+        
+        prices = sorted(customers[customers["price_max"] != 0]["price_max"].to_list())
+        q1 = len(prices) // 4
+        q3 = q1 * 3
+
+        def get_price_group(price_mean):
+            if price_mean < prices[q1]:
+                return "low"
+            elif price_mean < prices[q3]:
+                return "medium"
+            else:
+                return "high"
+        customers["price_group"] = customers["price_max"].apply(get_price_group)
+        
+        return customers
     
     ### Static 
         
