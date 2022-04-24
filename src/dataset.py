@@ -1,9 +1,10 @@
 from .utils import *
 
 class Dataset:
-    def __init__(self, train_days: int = 30, test_days: int = 0):
+    def __init__(self, skip_days: int = None, train_days: int = 30, test_days: int = 0):
         self.train_days = train_days
         self.test_days = test_days
+        self.skip_days = skip_days
         
         self.origin_transactions = self.load_original_transactions()
         self.train = self.get_transaction_train()
@@ -18,7 +19,12 @@ class Dataset:
         return pd.read_csv("../input/customers.csv")
         
     def load_original_transactions(self):
-        return pd.read_csv("../input/transactions.csv", dtype={"article_id": str})
+        transactions = pd.read_csv("../input/transactions.csv", dtype={"article_id": str})
+        if self.skip_days is not None:
+            max_date = subtract_days(transactions["t_dat"].max(), self.skip_days)
+            return transactions[(transactions["t_dat"] <= max_date)]
+        else:
+            return transactions
     
     ### Transactions
     
