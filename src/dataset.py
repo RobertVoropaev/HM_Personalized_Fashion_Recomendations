@@ -1,7 +1,7 @@
 from .utils import *
 
 class Dataset:
-    def __init__(self, skip_days: int = None, train_days: int = 30, test_days: int = 0):
+    def __init__(self, skip_days: int = 0, train_days: int = 9999, test_days: int = 0):
         self.train_days = train_days
         self.test_days = test_days
         self.skip_days = skip_days
@@ -19,15 +19,15 @@ class Dataset:
         return pd.read_csv("../input/customers.csv")
         
     def load_original_transactions(self):
-        transactions = pd.read_csv("../input/transactions.csv", dtype={"article_id": str})
+        transactions = pd.read_csv("../input/transactions.csv", dtype={"article_id": str}, parse_dates=["t_dat"])
         if self.skip_days is not None:
-            max_date = subtract_days(transactions["t_dat"].max(), self.skip_days)
+            max_date = transactions["t_dat"].max() - pd.Timedelta(days=self.skip_days)
             return transactions[(transactions["t_dat"] <= max_date)]
         else:
             return transactions
     
     ### Transactions
-    
+
     def get_transaction_train(self):
         transactions = self.origin_transactions.copy()
         
@@ -35,8 +35,8 @@ class Dataset:
         transactions["sales_channel_2_flg"] = (transactions["sales_channel_id"] == 2).astype(int)
         del transactions["sales_channel_id"]
         
-        min_date = subtract_days(transactions["t_dat"].max(), self.test_days + self.train_days)
-        max_date = subtract_days(transactions["t_dat"].max(), self.test_days)
+        min_date = transactions["t_dat"].max() - pd.Timedelta(days=self.test_days + self.train_days)
+        max_date = transactions["t_dat"].max() - pd.Timedelta(days=self.test_days)
         
         return transactions[(transactions["t_dat"] >= min_date) & (transactions["t_dat"] <= max_date)]
     
@@ -47,12 +47,12 @@ class Dataset:
         transactions["sales_channel_2_flg"] = (transactions["sales_channel_id"] == 2).astype(int)
         del transactions["sales_channel_id"]
         
-        min_date = subtract_days(transactions["t_dat"].max(), self.test_days)
+        min_date = transactions["t_dat"].max() - pd.Timedelta(days=self.test_days)
         
         return transactions[(transactions["t_dat"] > min_date)]
     
-    def get_train_test(self, train_days: int = 30):
-        min_date = subtract_days(self.train["t_dat"].max(), train_days)
+    def get_train_and_test(self, train_days: int = 9999):
+        min_date = self.train["t_dat"].max() - pd.Timedelta(days=self.train_days)
         train = self.train[(self.train["t_dat"] > min_date)]
         return train, self.test
     
@@ -105,8 +105,8 @@ class Dataset:
         articles_agg = articles_agg.fillna(0.0)
         
         t_dat_max = self.train["t_dat"].max()
-        articles_agg["last_days_ago"] = articles_agg["t_dat_max"].apply(lambda x: self.day_diff(t_dat_max, x))
-        articles_agg["first_days_ago"] = articles_agg["t_dat_min"].apply(lambda x: self.day_diff(t_dat_max, x))
+        articles_agg["last_days_ago"] = articles_agg["t_dat_max"].apply(lambda x: (t_dat_max - x).days)
+        articles_agg["first_days_ago"] = articles_agg["t_dat_min"].apply(lambda x: (t_dat_max - x).days)
         del articles_agg["t_dat_max"], articles_agg["t_dat_min"]
         
         ### Mean count
@@ -181,8 +181,8 @@ class Dataset:
         )
 
         t_data_max = self.train["t_dat"].max()
-        customer_agg["last_days_ago"] = customer_agg["t_dat_max"].apply(lambda x: self.day_diff(t_data_max, x))
-        customer_agg["first_days_ago"] = customer_agg["t_dat_min"].apply(lambda x: self.day_diff(t_data_max, x))
+        customer_agg["last_days_ago"] = customer_agg["t_dat_max"].apply(lambda x: (t_data_max - x).days)
+        customer_agg["first_days_ago"] = customer_agg["t_dat_min"].apply(lambda x: (t_data_max - x).days)
         del customer_agg["t_dat_max"], customer_agg["t_dat_min"]
 
         customer_agg = customer_agg.fillna(0.0)
@@ -270,9 +270,3 @@ class Dataset:
 
         new_series = series.apply(lambda x: x if x in value_list else "Other")
         return new_series
-
-    @staticmethod
-    def day_diff(max_date, min_date):
-        date_format = "%Y-%m-%d"
-        return (datetime.strptime(max_date, date_format) - 
-                datetime.strptime(min_date, date_format)).days

@@ -44,7 +44,10 @@ def subtract_days(date, days):
 ### Labels ###
 
 def get_true_articles(transactions) -> pd.Series:
-    return transactions.groupby("customer_id")["article_id"].unique().apply(" ".join)
+    return (
+        transactions.groupby("customer_id")["article_id"].apply(" ".join)
+            .reset_index().rename({"article_id": "true"}, axis=1)
+    )
 
 
 ### Images
