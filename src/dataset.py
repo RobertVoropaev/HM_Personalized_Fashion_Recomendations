@@ -6,33 +6,61 @@ class Dataset:
         self.test_days = test_days
         self.skip_days = skip_days
         
+        self.articles, self.articles_num2id, self.articles_id2num = self.load_original_articles()
+        self.customers, self.customers_num2id, self.customers_id2num = self.load_original_customers()
+        
         self.origin_transactions = self.load_original_transactions()
         self.train = self.get_transaction_train()
         self.test = self.get_transaction_test()
         
+
+        
     ### Original dataset
         
     def load_original_articles(self):
-        return pd.read_csv("../input/articles.csv", dtype={"article_id": str})
+        articles = pd.read_csv("../input/articles.csv", dtype={"article_id": str})
+        
+        articles_num2id = dict(enumerate(articles["article_id"].unique()))
+        articles_id2num = {id_: num for num, id_  in articles_num2id.items()}        
+        
+        articles["article_id"] = articles["article_id"].map(articles_id2num).astype(np.uint32)
+        
+        return articles, articles_num2id, articles_id2num
     
     def load_original_customers(self):
-        return pd.read_csv("../input/customers.csv")
+        customers = pd.read_csv("../input/customers.csv")
+
+        customers_num2id = dict(enumerate(customers["customer_id"].unique()))
+        customers_id2num = {id_: num for num, id_ in customers_num2id.items()}
+        
+        customers["customer_id"] = customers["customer_id"].map(customers_id2num).astype(np.uint32)
+        
+        return customers, customers_num2id, customers_id2num
         
     def load_original_transactions(self):
-        transactions = pd.read_csv("../input/transactions.csv", dtype={"article_id": str}, parse_dates=["t_dat"])
+        transactions = pd.read_csv("../input/transactions.csv", 
+                                   dtype={"article_id": str}, 
+                                   parse_dates=["t_dat"])
+        
+
+        
         if self.skip_days is not None:
             max_date = transactions["t_dat"].max() - pd.Timedelta(days=self.skip_days)
-            return transactions[(transactions["t_dat"] <= max_date)]
-        else:
-            return transactions
+            transactions = transactions[(transactions["t_dat"] <= max_date)]
+
+        transactions["customer_id"] = transactions["customer_id"].map(self.customers_id2num).astype(np.uint32)
+        transactions["article_id"] = transactions["article_id"].map(self.articles_id2num).astype(np.uint32)
+        transactions["price"] = (transactions["price"] * 10000).astype(np.uint16)
+            
+        return transactions
     
     ### Transactions
 
     def get_transaction_train(self):
         transactions = self.origin_transactions.copy()
         
-        transactions["sales_channel_1_flg"] = (transactions["sales_channel_id"] == 1).astype(int)
-        transactions["sales_channel_2_flg"] = (transactions["sales_channel_id"] == 2).astype(int)
+        transactions["sales_channel_1_flg"] = (transactions["sales_channel_id"] == 1).astype(np.uint8)
+        transactions["sales_channel_2_flg"] = (transactions["sales_channel_id"] == 2).astype(np.uint8)
         del transactions["sales_channel_id"]
         
         min_date = transactions["t_dat"].max() - pd.Timedelta(days=self.test_days + self.train_days)
@@ -43,8 +71,8 @@ class Dataset:
     def get_transaction_test(self):
         transactions = self.origin_transactions.copy()
         
-        transactions["sales_channel_1_flg"] = (transactions["sales_channel_id"] == 1).astype(int)
-        transactions["sales_channel_2_flg"] = (transactions["sales_channel_id"] == 2).astype(int)
+        transactions["sales_channel_1_flg"] = (transactions["sales_channel_id"] == 1).astype(np.uint8)
+        transactions["sales_channel_2_flg"] = (transactions["sales_channel_id"] == 2).astype(np.uint8)
         del transactions["sales_channel_id"]
         
         min_date = transactions["t_dat"].max() - pd.Timedelta(days=self.test_days)
@@ -59,7 +87,7 @@ class Dataset:
     ### Articles
     
     def get_articles(self):
-        articles = self.load_original_articles()
+        articles = self.articles
         
         ### Prepare
         
@@ -98,8 +126,8 @@ class Dataset:
             articles_agg["sales_channel_1_flg_sum"] + articles_agg["sales_channel_2_flg_sum"]
         )
 
-        articles_agg["sales_channel_1_ratio"] = (
-            articles_agg["sales_channel_1_flg_sum"] / articles_agg["sales_sum"]
+        articles_agg["sales_channel_1_percent"] = (
+            articles_agg["sales_channel_1_flg_sum"] / articles_agg["sales_sum"] * 100
 
         )
         articles_agg = articles_agg.fillna(0.0)
@@ -125,6 +153,23 @@ class Dataset:
                     .fillna(0.0)
         )
         
+        # Typing
+        
+        articles = articles.astype({"price_min": np.uint16, 
+                                    "price_max": np.uint16, 
+                                    "price_mean": np.uint16, 
+                                    "price_std": np.uint16, 
+                                    "sales_channel_1_flg_sum": np.uint16, 
+                                    "sales_channel_2_flg_sum": np.uint16, 
+                                    "sales_sum": np.uint16, 
+                                    "last_days_ago": np.uint16, 
+                                    "first_days_ago": np.uint16, 
+                                    "mean_count_on_customer": np.uint8, 
+                                    "sales_channel_1_percent": np.uint8})
+        
+
+        del articles["detail_desc"] 
+        
         return articles
     
     
@@ -132,7 +177,8 @@ class Dataset:
     ### Customers
     
     def get_customers(self):
-        customers = self.load_original_customers()
+        customers = self.customers
+        
         customers = customers.fillna({"FN": 0.0, "Active": 0.0, 
                                       "club_member_status": "Other", 
                                       "fashion_news_frequency": "None", 
@@ -176,8 +222,8 @@ class Dataset:
             customer_agg["sales_channel_1_flg_sum"] + customer_agg["sales_channel_2_flg_sum"]
         )
 
-        customer_agg["sales_channel_1_ratio"] = (
-            customer_agg["sales_channel_1_flg_sum"] / customer_agg["sales_sum"]
+        customer_agg["sales_channel_1_percent"] = (
+            customer_agg["sales_channel_1_flg_sum"] / customer_agg["sales_sum"] * 100
         )
 
         t_data_max = self.train["t_dat"].max()
@@ -258,6 +304,34 @@ class Dataset:
             else:
                 return "high"
         customers["price_group"] = customers["price_max"].apply(get_price_group)
+        
+        # Typing
+        
+
+        customers = customers.astype({"FN": np.uint8, 
+                                    "Active": np.uint8, 
+                                    "age": np.uint8, 
+                                    "price_min": np.uint16, 
+                                    "price_max": np.uint16, 
+                                    "price_mean": np.uint16, 
+                                    "price_std": np.uint16, 
+                                    "sales_channel_1_flg_sum": np.uint16, 
+                                    "sales_channel_2_flg_sum": np.uint16, 
+                                    "sales_sum": np.uint16, 
+                                    "sales_channel_1_percent": np.uint8,
+                                    "last_days_ago": np.uint16, 
+                                    "first_days_ago": np.uint16, 
+                                    "mean_article_count_on_date": np.uint16, 
+                                    "Ladieswear_count": np.uint16, 
+                                    "Baby/Children_count": np.uint16, 
+                                    "Menswear_count": np.uint16, 
+                                    "Sport_count": np.uint16, 
+                                    "Divided_count": np.uint16, 
+                                    "has_children": np.uint8})
+        
+
+        del customers["postal_code"] 
+        
         
         return customers
     

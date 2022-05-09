@@ -44,7 +44,7 @@ def add_quotient(train):
     df['quotient'] = df['count_targ'] / df['count']
     return df
 
-def get_purchase_dict(df, a=2.5e4, b=1.5e5, c=2e-1, d=1e3):
+def get_purchase_dict(df, a=2.5e4, b=1.5e5, c=2e-1, d=1e3, tqdm_disable:bool = False):
     last_ts = df['t_dat'].max()
     def get_tr_score(line):
         x = max(1, (last_ts - line['t_dat']).days)
@@ -59,7 +59,7 @@ def get_purchase_dict(df, a=2.5e4, b=1.5e5, c=2e-1, d=1e3):
     )
 
     purchase_dict = {}
-    for line in tqdm(cust_art_score):
+    for line in tqdm(cust_art_score, disable=tqdm_disable):
         cust_id, art_id, score = line
 
         if cust_id not in purchase_dict:
@@ -131,7 +131,8 @@ class ImplicitDatasetMaker:
     
 def get_similar_items(train, articles, customers,
                       factors = 200, iterations = 5, regularization = 0.01, 
-                      min_w1_count_for_actual_article = 10, similar_num_for_article = 10):
+                      min_w1_count_for_actual_article = 10, similar_num_for_article = 10, 
+                      random_state=1):
 
     # Fit model
     dm = ImplicitDatasetMaker(articles, customers)
@@ -143,7 +144,7 @@ def get_similar_items(train, articles, customers,
         regularization=regularization,
         use_gpu=True,
         num_threads=16,
-        random_state=SEED
+        random_state=random_state
     )
 
     als.fit(train_csr, show_progress=True)
